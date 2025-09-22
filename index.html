@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TFT Live GNN-Assisted Generator (Set 15 Optimized)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        
+        .multi-select-container { position: relative; }
+        .multi-select-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 10; max-height: 200px; overflow-y: auto; }
+
+        .champion-cost-1 { border: 2px solid #808080; }
+        .champion-cost-2 { border: 2px solid #16a34a; }
+        .champion-cost-3 { border: 2px solid #2563eb; }
+        .champion-cost-4 { border: 2px solid #9333ea; }
+        .champion-cost-5 { border: 2px solid #f59e0b; }
+        
+        .search-path-champ, .gnn-choice-champ { transition: all 0.2s ease-out; }
+        .gnn-choice-champ.is-pruned { opacity: 0.3; filter: grayscale(80%); }
+        .gnn-choice-champ.is-exploring { transform: scale(1.1); box-shadow: 0 0 15px rgba(192, 132, 252, 0.7); }
+
+        .modal-overlay { transition: opacity 0.3s ease; }
+        .matrix-cell { transition: background-color 0.3s ease; }
+        .progress-bar-inner { transition: width 0.3s ease-out; }
+        #findTeamBtn:disabled, #openGnnModalBtn:disabled { cursor: not-allowed; opacity: 0.7; }
+        #errorDisplay pre { white-space: pre-wrap; word-wrap: break-word; }
+        input[type=number]:disabled, input[type=range]:disabled { background-color: #374151; cursor: not-allowed; opacity: 0.6; }
+
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-purple-400">Live GNN-Assisted Generator (Set 15)</h1>
+            <p class="text-gray-400 mt-2">Featuring Optimized Exhaustive Search</p>
+        </header>
+
+        <div class="flex flex-col lg:flex-row gap-8">
+            <!-- Controls Panel -->
+            <aside class="w-full lg:w-1/3 bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-3">
+                    <h2 class="text-2xl font-semibold">Search Parameters</h2>
+                    <button id="openGnnModalBtn" class="text-purple-400 hover:text-purple-300 text-sm"><i class="fas fa-info-circle mr-1"></i> About the GNN</button>
+                </div>
+                
+                <div class="mb-4">
+                    <label for="gnnPruningStrength" class="block text-lg font-medium mb-2">GNN Pruning Strength: <span id="gnnPruningStrengthValue" class="font-bold text-purple-400">Medium</span></label>
+                    <input type="range" id="gnnPruningStrength" min="0" max="4" value="2" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    <p class="text-xs text-gray-500 mt-1">"Off" is 100% exhaustive but slow. "Aggressive" is faster but may miss some comps.</p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
+                    <div>
+                        <label for="teamSize" class="block text-lg font-medium mb-2">Team Size: <span id="teamSizeValue" class="font-bold text-purple-400">8</span></label>
+                        <input type="range" id="teamSize" min="1" max="10" value="8" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                    <div>
+                         <label for="gnnDepth" class="block text-lg font-medium mb-2">GNN Training Depth: <span id="gnnDepthValue" class="font-bold text-purple-400">3</span></label>
+                        <input type="range" id="gnnDepth" min="1" max="20" value="3" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Trait Emblems (+1)</label>
+                    <div id="emblemSelect" class="multi-select-container"></div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Include Champions</label>
+                    <div id="includedChampions" class="multi-select-container"></div>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Force Active Traits for Unit</label>
+                     <p class="text-xs text-gray-500 mb-2">Ensures all traits are active for selected units if they appear in a team.</p>
+                    <div id="forceActiveTraitChampions" class="multi-select-container"></div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Exclude Champions</label>
+                    <div id="excludedChampions" class="multi-select-container"></div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Required Active Synergies</label>
+                    <div id="requiredTraits" class="space-y-2"></div>
+                    <button id="addTraitRequirementBtn" class="mt-2 text-sm text-purple-400 hover:text-purple-300"><i class="fas fa-plus mr-1"></i> Add Synergy Rule</button>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-lg font-medium mb-2">Unit Cost Requirements</label>
+                    <p class="text-xs text-gray-500 mb-2">Check the box to enforce an exact number of units for that cost.</p>
+                    <div id="costRequirements" class="space-y-2">
+                        <!-- Inputs will be generated here by JS -->
+                    </div>
+                </div>
+
+                <div id="errorDisplay" class="my-4 text-red-400 bg-red-900/50 p-3 rounded-lg hidden"></div>
+
+                <div class="mt-8">
+                    <button id="findTeamBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition duration-300 ease-in-out transform hover:scale-105">
+                        <i class="fas fa-cogs mr-2"></i> Start Search
+                    </button>
+                    <button id="stopBtn" class="hidden w-full mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition duration-300">
+                        <i class="fas fa-stop mr-2"></i> Stop Search
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Results Panel -->
+            <main class="w-full lg:w-2/3 bg-gray-800 p-6 rounded-2xl shadow-lg">
+                 <div id="searchVisualization" class="mb-6 hidden space-y-4">
+                      <div>
+                           <h3 id="livePathTitle" class="text-xl font-semibold mb-2 text-gray-400">Live Search Path</h3>
+                           <div id="livePathContainer" class="flex items-center gap-2 p-3 bg-gray-900/50 rounded-lg min-h-[80px]"></div>
+                      </div>
+                 </div>
+                
+                <div id="welcomeMessage" class="text-center py-16">
+                    <i class="fas fa-network-wired text-4xl text-purple-400"></i>
+                    <h3 class="text-2xl mt-4">Define your desired team composition</h3>
+                    <p class="text-gray-400 mt-2">Set requirements and watch the optimized search unfold.</p>
+                </div>
+
+                <div id="resultsContainer" class="hidden">
+                    <div class="flex justify-between items-center border-b border-gray-700 pb-3 mb-4">
+                        <h2 id="resultsTitle" class="text-2xl font-semibold">Top Compositions</h2>
+                        <div id="searchStats" class="text-sm text-gray-400"></div>
+                    </div>
+                    <div id="solutionsList" class="space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- GNN Info Modal -->
+    <div id="gnnModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 hidden modal-overlay">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-4xl w-full text-gray-300 custom-scrollbar overflow-y-auto max-h-[90vh]">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-3xl font-bold text-purple-400">About the Search Algorithm</h2>
+                <button id="closeGnnModalBtn" class="text-gray-500 hover:text-white text-2xl">&times;</button>
+            </div>
+            <div class="space-y-6">
+                 <div>
+                    <h3 class="text-xl font-semibold mb-2">Optimized Exhaustive Search</h3>
+                    <p class="text-gray-400">This tool uses a GNN-assisted exhaustive backtracking search. It guarantees it will find every single possible team that meets your exact constraints, but can be slow for very open-ended searches.</p>
+                    <ol class="list-decimal list-inside mt-2 space-y-2 text-gray-400">
+                        <li><strong>Systematic Construction:</strong> The algorithm recursively builds teams one champion at a time, exploring every possible combination.</li>
+                        <li><strong>Intelligent Pruning:</strong> The search is heavily optimized. It will never add a champion that doesn't share at least one trait with the existing team members, preventing "orphan" units and massively speeding up the search.</li>
+                        <li><strong>GNN-Assisted Ordering:</strong> To find good results faster, the GNN is used to order the initial pool of champions, ensuring the most promising units are tested first.</li>
+                        <li><strong>GNN-Guided Pruning (Optional):</strong> You can use the "GNN Pruning Strength" slider to further accelerate the search. This will prune branches that the GNN determines have low potential, even if they don't violate a hard constraint. This makes the search much faster but no longer 100% exhaustive.</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+     <div id="feedback-toast" class="fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transition-opacity duration-300 z-50">
+        Code copied to clipboard!
+    </div>
+
+
+    <script>
+        // --- DATA (TFT Set 15: K.O. Colosseum) ---
+        const TRAITS = { battle_academia: { name: 'Battle Academia', thresholds: [2, 4, 6] }, bastion: { name: 'Bastion', thresholds: [2, 4, 6] }, the_crew: { name: 'The Crew', thresholds: [1, 2, 3, 4, 5] }, crystal_gambit: { name: 'Crystal Gambit', thresholds: [3, 5, 7] }, duelist: { name: 'Duelist', thresholds: [2, 4, 6] }, edgelord: { name: 'Edgelord', thresholds: [2, 4, 6] }, executioner: { name: 'Executioner', thresholds: [2, 3, 4, 5] }, heavyweight: { name: 'Heavyweight', thresholds: [2, 4, 6] }, juggernaut: { name: 'Juggernaut', thresholds: [2, 4, 6] }, luchador: { name: 'Luchador', thresholds: [2, 4] }, mentor: { name: 'Mentor', thresholds: [1, 4] }, mighty_mech: { name: 'Mighty Mech', thresholds: [3, 5, 7] }, prodigy: { name: 'Prodigy', thresholds: [2, 3, 4, 5] }, protector: { name: 'Protector', thresholds: [2, 4, 6] }, sniper: { name: 'Sniper', thresholds: [2, 3, 4, 5] }, sorcerer: { name: 'Sorcerer', thresholds: [2, 4, 6] }, soul_fighter: { name: 'Soul Fighter', thresholds: [2, 4, 6, 8] }, star_guardian: { name: 'Star Guardian', thresholds: [2, 4, 6, 8] }, strategist: { name: 'Strategist', thresholds: [2, 3, 4, 5] }, supreme_cells: { name: 'Supreme Cells', thresholds: [2, 3, 4] }, wraith: { name: 'Wraith', thresholds: [2, 4, 6] }, the_champ: { name: 'The Champ', thresholds: [1] }, rosemother: { name: 'Rosemother', thresholds: [1] }, stance_master: { name: 'Stance Master', thresholds: [1] }, monster_trainer: { name: 'Monster Trainer', thresholds: [1] } };
+        const LEE_SIN_VARIANT_IDS = new Set(['lee_sin_duelist', 'lee_sin_executioner', 'lee_sin_juggernaut']);
+        const SOLO_TRAITS = new Set(['the_champ', 'rogue_class', 'rosemother', 'stance_master', 'monster_trainer']);
+        
+        // --- UNIFIED CHAMPION DATA ---
+        const CHAMPIONS_BASE = [ { id: 'aatrox', name: 'Aatrox', cost: 1, traits: ['juggernaut', 'mighty_mech'] }, { id: 'ezreal', name: 'Ezreal', cost: 1, traits: ['battle_academia', 'prodigy'] }, { id: 'garen', name: 'Garen', cost: 1, traits: ['battle_academia', 'bastion'] }, { id: 'gnar', name: 'Gnar', cost: 1, traits: ['luchador', 'sniper'] }, { id: 'kalista', name: 'Kalista', cost: 1, traits: ['executioner', 'soul_fighter'] }, { id: 'kayle', name: 'Kayle', cost: 1, traits: ['duelist', 'wraith'] }, { id: 'kennen', name: 'Kennen', cost: 1, traits: ['protector', 'sorcerer', 'supreme_cells'] }, { id: 'lucian', name: 'Lucian', cost: 1, traits: ['mighty_mech', 'sorcerer'] }, { id: 'malphite', name: 'Malphite', cost: 1, traits: ['the_crew', 'protector'] }, { id: 'naafiri', name: 'Naafiri', cost: 1, traits: ['juggernaut', 'soul_fighter'] }, { id: 'rell', name: 'Rell', cost: 1, traits: ['bastion', 'star_guardian'] }, { id: 'sivir', name: 'Sivir', cost: 1, traits: ['the_crew', 'sniper'] }, { id: 'syndra', name: 'Syndra', cost: 1, traits: ['crystal_gambit', 'prodigy', 'star_guardian'] }, { id: 'zac', name: 'Zac', cost: 1, traits: ['heavyweight', 'wraith'] }, { id: 'dr_mundo', name: 'Dr. Mundo', cost: 2, traits: ['juggernaut', 'luchador'] }, { id: 'gangplank', name: 'Gangplank', cost: 2, traits: ['duelist', 'mighty_mech'] }, { id: 'janna', name: 'Janna', cost: 2, traits: ['crystal_gambit', 'protector', 'strategist'] }, { id: 'jhin', name: 'Jhin', cost: 2, traits: ['sniper', 'wraith'] }, { id: 'kai_sa', name: 'Kai\'Sa', cost: 2, traits: ['duelist', 'supreme_cells'] }, { id: 'katarina', name: 'Katarina', cost: 2, traits: ['battle_academia', 'executioner'] }, { id: 'kobuko', name: 'Kobuko', cost: 2, traits: ['heavyweight', 'mentor'] }, { id: 'lux', name: 'Lux', cost: 2, traits: ['sorcerer', 'soul_fighter'] }, { id: 'rakan', name: 'Rakan', cost: 2, traits: ['battle_academia', 'protector'] }, { id: 'shen', name: 'Shen', cost: 2, traits: ['bastion', 'the_crew', 'edgelord'] }, { id: 'vi', name: 'Vi', cost: 2, traits: ['crystal_gambit', 'juggernaut'] }, { id: 'xin_zhao', name: 'Xin Zhao', cost: 2, traits: ['bastion', 'soul_fighter'] }, { id: 'xayah', name: 'Xayah', cost: 2, traits: ['edgelord', 'star_guardian'] }, { id: 'ahri', name: 'Ahri', cost: 3, traits: ['sorcerer', 'star_guardian'] }, { id: 'caitlyn', name: 'Caitlyn', cost: 3, traits: ['battle_academia', 'sniper'] }, { id: 'darius', name: 'Darius', cost: 3, traits: ['heavyweight', 'supreme_cells'] }, { id: 'jayce', name: 'Jayce', cost: 3, traits: ['battle_academia', 'heavyweight'] }, { id: 'malzahar', name: 'Malzahar', cost: 3, traits: ['prodigy', 'wraith'] }, { id: 'neeko', name: 'Neeko', cost: 3, traits: ['protector', 'star_guardian'] }, { id: 'senna', name: 'Senna', cost: 3, traits: ['executioner', 'mighty_mech'] }, { id: 'swain', name: 'Swain', cost: 3, traits: ['bastion', 'crystal_gambit', 'sorcerer'] }, { id: 'udyr', name: 'Udyr', cost: 3, traits: ['duelist', 'juggernaut', 'mentor'] }, { id: 'viego', name: 'Viego', cost: 3, traits: ['duelist', 'soul_fighter'] }, { id: 'yasuo', name: 'Yasuo', cost: 3, traits: ['edgelord', 'mentor'] }, { id: 'ziggs', name: 'Ziggs', cost: 3, traits: ['the_crew', 'strategist'] }, { id: 'akali', name: 'Akali', cost: 4, traits: ['executioner', 'supreme_cells'] }, { id: 'ashe', name: 'Ashe', cost: 4, traits: ['crystal_gambit', 'duelist'] }, { id: 'jarvan_iv', name: 'Jarvan IV', cost: 4, traits: ['mighty_mech', 'strategist'] }, { id: 'jinx', name: 'Jinx', cost: 4, traits: ['sniper', 'star_guardian'] }, { id: 'k_sante', name: 'K\'Sante', cost: 4, traits: ['protector', 'wraith'] }, { id: 'karma', name: 'Karma', cost: 4, traits: ['mighty_mech', 'sorcerer'] }, { id: 'leona', name: 'Leona', cost: 4, traits: ['battle_academia', 'bastion'] }, { id: 'poppy', name: 'Poppy', cost: 4, traits: ['heavyweight', 'star_guardian'] }, { id: 'ryze', name: 'Ryze', cost: 4, traits: ['executioner', 'mentor', 'strategist'] }, { id: 'samira', name: 'Samira', cost: 4, traits: ['edgelord', 'soul_fighter'] }, { id: 'sett', name: 'Sett', cost: 4, traits: ['juggernaut', 'soul_fighter'] }, { id: 'volibear', name: 'Volibear', cost: 4, traits: ['edgelord', 'luchador'] }, { id: 'yuumi', name: 'Yuumi', cost: 4, traits: ['battle_academia', 'prodigy'] }, { id: 'braum', name: 'Braum', cost: 5, traits: ['bastion', 'luchador', 'the_champ'] }, { id: 'gwen', name: 'Gwen', cost: 5, traits: ['sorcerer', 'soul_fighter'] }, { id: 'lulu', name: 'Lulu', cost: 5, traits: ['monster_trainer'] }, { id: 'seraphine', name: 'Seraphine', cost: 5, traits: ['prodigy', 'star_guardian'] }, { id: 'twisted_fate', name: 'Twisted Fate', cost: 5, traits: ['the_crew', 'rogue_class'] }, { id: 'varus', name: 'Varus', cost: 5, traits: ['sniper', 'wraith'] }, { id: 'yone', name: 'Yone', cost: 5, traits: ['edgelord', 'mighty_mech'] }, { id: 'zyra', name: 'Zyra', cost: 5, traits: ['crystal_gambit', 'rosemother'] }, { id: 'lee_sin_duelist', name: 'Lee Sin (Duelist)', cost: 5, traits: ['stance_master', 'duelist'] }, { id: 'lee_sin_executioner', name: 'Lee Sin (Executioner)', cost: 5, traits: ['stance_master', 'executioner'] }, { id: 'lee_sin_juggernaut', name: 'Lee Sin (Juggernaut)', cost: 5, traits: ['stance_master', 'juggernaut'] } ];
+        const EXPORT_CODES = { 'Aatrox': '15a', 'Ahri': '15b', 'Akali': '000', 'Ashe': '15e', 'Braum': '196', 'Caitlyn': '15b', 'Darius': '166', 'Dr. Mundo': '014', 'Ezreal': '168', 'Gangplank': '016', 'Garen': '16a', 'Gnar': '018', 'Gwen': '16b', 'Janna': '16c', 'Jarvan IV': '16d', 'Jayce': '16e', 'Jhin': '16f', 'Jinx': '170', 'K\'Sante': '171', 'Kai\'Sa': '172', 'Karma': '019', 'Katarina': '174', 'Kayle': '175', 'Kennen': '175', 'Kobuko': '177', 'Leona': '179', 'Lucian': '017', 'Lulu': '17a', 'Lux': '176', 'Malphite': '017', 'Malzahar': '17e', 'Naafiri': '180', 'Neeko': '010', 'Poppy': '182', 'Rakan': '184', 'Rell': '185', 'Ryze': '187', 'Samira': '188', 'Seraphine': '189', 'Sett': '18a', 'Shen': '000', 'Sivir': '01b', 'Swain': '18c', 'Syndra': '18d', 'Twisted Fate': '01c', 'Udyr': '18e', 'Varus': '190', 'Vi': '01a', 'Viego': '191', 'Volibear': '199', 'Xayah': '192', 'Xin Zhao': '193', 'Yasuo': '194', 'Yone': '195', 'Yuumi': '196', 'Zac': '180', 'Ziggs': '198', 'Zyra': '01e', 'Lee Sin': '178' };
+        
+        const CHAMPIONS = CHAMPIONS_BASE.map(champ => {
+            const baseName = champ.name.replace(/ \(.*/, '');
+            return {...champ, exportCode: EXPORT_CODES[baseName] || null };
+        }).sort((a, b) => a.name.localeCompare(b.name));
+
+        const CHAMPION_MAP = new Map(CHAMPIONS.map(c => [c.id, c]));
+        const TRAIT_MAP = new Map(Object.entries(TRAITS).map(([id, data]) => [data.name, {id, ...data}]));
+        const SORTED_TRAIT_NAMES = Object.entries(TRAITS).filter(([id, data]) => !SOLO_TRAITS.has(id)).map(([id, data]) => data.name).sort();
+        const EMBLEM_TRAIT_NAMES = Object.entries(TRAITS).filter(([id, data]) => !SOLO_TRAITS.has(id)).map(([id, data]) => data.name).sort();
+        const multiSelectAPIs = {};
+        const TRAIT_EMOJIS = { battle_academia: '🎓', bastion: '🛡️', the_crew: '🤝', crystal_gambit: '💎', duelist: '⚔️', edgelord: '🔪', executioner: '🎯', heavyweight: '🥊', juggernaut: '💪', luchador: '🤼', mentor: '🧑‍🏫', mighty_mech: '🤖', prodigy: '🧠', protector: '🔰', sniper: '🔭', sorcerer: '🔮', soul_fighter: '🔥', star_guardian: '⭐', strategist: '🗺️', supreme_cells: '🧬', wraith: '👻', the_champ: '🏆', rosemother: '🌹', stance_master: '🧘', monster_trainer: '🐲' };
+
+        class GNN {
+            constructor() {
+                this.synergyMatrix = {};
+                this.candidateCache = {};
+                this.isTrained = false;
+            }
+
+            async train(depth, onProgress) {
+                if (onProgress) await onProgress(0, 'Building Unit-Pairing Graph...');
+                const unitPairGraph = {};
+                for (let i = 0; i < CHAMPIONS.length; i++) {
+                    for (let j = i + 1; j < CHAMPIONS.length; j++) {
+                        const champA = CHAMPIONS[i]; const champB = CHAMPIONS[j];
+                        const sharedTraits = champA.traits
+                            .filter(t => !SOLO_TRAITS.has(t))
+                            .filter(t => champB.traits.includes(t));
+                        if (sharedTraits.length > 0) {
+                            if (!unitPairGraph[champA.id]) unitPairGraph[champA.id] = {};
+                            unitPairGraph[champA.id][champB.id] = sharedTraits.length;
+                        }
+                    }
+                }
+                if (onProgress) await onProgress(0.05, 'Calculating Base Synergies...');
+                
+                const baseMatrix = {};
+                for (const champAId in unitPairGraph) {
+                    for (const champBId in unitPairGraph[champAId]) {
+                        const weight = unitPairGraph[champAId][champBId];
+                        const champA = CHAMPION_MAP.get(champAId); 
+                        const champB = CHAMPION_MAP.get(champBId);
+                        const traitsA = champA.traits.filter(t => !SOLO_TRAITS.has(t));
+                        const traitsB = champB.traits.filter(t => !SOLO_TRAITS.has(t));
+
+                        for (const traitA of traitsA) {
+                            for (const traitB of traitsB) {
+                                if (traitA === traitB) continue;
+                                const [t1, t2] = [traitA, traitB].sort();
+                                if (!baseMatrix[t1]) baseMatrix[t1] = {};
+                                baseMatrix[t1][t2] = (baseMatrix[t1][t2] || 0) + weight;
+                            }
+                        }
+                    }
+                }
+                let maxScore = 0;
+                for(const t1 in baseMatrix) for(const t2 in baseMatrix[t1]) maxScore = Math.max(maxScore, baseMatrix[t1][t2]);
+                if(maxScore > 0) for(const t1 in baseMatrix) for(const t2 in baseMatrix[t1]) baseMatrix[t1][t2] /= maxScore;
+                
+                this.synergyMatrix = JSON.parse(JSON.stringify(baseMatrix));
+                if (onProgress) await onProgress(0.1, 'Running Inference...');
+                
+                const INFERENCE_DECAY = 0.5;
+                for (let d = 0; d < depth; d++) {
+                    const inferredSynergies = {};
+                    const currentMatrix = JSON.parse(JSON.stringify(this.synergyMatrix));
+                    const allTraits = Object.keys(TRAITS).filter(t => !SOLO_TRAITS.has(t));
+                    for (let i = 0; i < allTraits.length; i++) {
+                        const tA = allTraits[i];
+                        for (let j = i + 1; j < allTraits.length; j++) {
+                            const tC = allTraits[j]; let bestInferredScore = 0;
+                            for (const tB of allTraits) {
+                                if (tA === tB || tC === tB) continue;
+                                const [sAB_1, sAB_2] = [tA, tB].sort(); const [sBC_1, sBC_2] = [tB, tC].sort();
+                                const scoreAB = currentMatrix[sAB_1]?.[sAB_2] || 0; const scoreBC = currentMatrix[sBC_1]?.[sBC_2] || 0;
+                                if (scoreAB > 0 && scoreBC > 0) bestInferredScore = Math.max(bestInferredScore, scoreAB * scoreBC);
+                            }
+                            if (bestInferredScore > 0) {
+                                const [sAC_1, sAC_2] = [tA, tC].sort();
+                                if (!inferredSynergies[sAC_1]) inferredSynergies[sAC_1] = {};
+                                inferredSynergies[sAC_1][sAC_2] = (inferredSynergies[sAC_1][sAC_2] || 0) + bestInferredScore;
+                            }
+                        }
+                    }
+                    for (const t1 in inferredSynergies) {
+                        for (const t2 in inferredSynergies[t1]) {
+                            if (!this.synergyMatrix[t1]) this.synergyMatrix[t1] = {};
+                            const decayedScore = inferredSynergies[t1][t2] * (INFERENCE_DECAY / (d + 1));
+                            this.synergyMatrix[t1][t2] = (this.synergyMatrix[t1][t2] || 0) + decayedScore;
+                        }
+                    }
+                    if (onProgress) await onProgress(0.1 + (0.4 * (d + 1) / depth), `Inference Iteration ${d + 1}/${depth}...`);
+                }
+
+                maxScore = 0;
+                for(const t1 in this.synergyMatrix) for(const t2 in this.synergyMatrix[t1]) maxScore = Math.max(maxScore, this.synergyMatrix[t1][t2]);
+                if(maxScore > 0) for(const t1 in this.synergyMatrix) for(const t2 in this.synergyMatrix[t1]) this.synergyMatrix[t1][t2] = (this.synergyMatrix[t1][t2] / maxScore) * 2.0;
+
+                if (onProgress) await onProgress(0.5, `Pre-computing Candidate Rankings...`);
+                this.candidateCache = {};
+                for(let i=0; i < CHAMPIONS.length; i++) {
+                    const champ = CHAMPIONS[i];
+                    const teamTraits = new Set(champ.traits.filter(t => !SOLO_TRAITS.has(t)));
+                    const scores = CHAMPIONS.map(candidate => {
+                        if (candidate.id === champ.id) return { ...candidate, gnn_score: -1 };
+                        let score = 0;
+                        const candidateTraits = candidate.traits.filter(t => !SOLO_TRAITS.has(t));
+                        for (const candTrait of candidateTraits) {
+                            if (teamTraits.has(candTrait)) score += 0.5;
+                            for (const teamTrait of teamTraits) {
+                                const [t1, t2] = [candTrait, teamTrait].sort();
+                                score += (this.synergyMatrix[t1]?.[t2] || 0);
+                            }
+                        }
+                        return { ...candidate, gnn_score: score };
+                    });
+                    this.candidateCache[champ.id] = scores.sort((a, b) => b.gnn_score - a.gnn_score);
+                    if (onProgress) await onProgress(0.5 + (0.5 * (i + 1) / CHAMPIONS.length), `Pre-computing Candidate Rankings...`);
+                }
+
+                this.isTrained = true;
+                if (onProgress) await onProgress(1, 'Training Complete!');
+            }
+            
+            getRankedCandidates(currentTeam, candidatePool) {
+                if (currentTeam.length === 0) {
+                    return candidatePool.map(c => ({ ...c, gnn_score: 1.0 })).sort((a,b) => b.cost - a.cost);
+                }
+                
+                const candidateScores = {};
+                for (const member of currentTeam) {
+                    const cachedScores = this.candidateCache[member.id] || [];
+                    for (const candidate of cachedScores) {
+                        candidateScores[candidate.id] = (candidateScores[candidate.id] || 0) + candidate.gnn_score;
+                    }
+                }
+
+                const rankedCandidates = candidatePool.map(c => ({
+                    ...c,
+                    gnn_score: candidateScores[c.id] || 0
+                }));
+                
+                return rankedCandidates.sort((a, b) => b.gnn_score - a.gnn_score);
+            }
+
+            getTeamPotential(team) {
+                if (team.length <= 1) return 1.0;
+                let totalScore = 0;
+                let pairs = 0;
+                for (let i = 0; i < team.length; i++) {
+                    for (let j = i + 1; j < team.length; j++) {
+                        const member1 = team[i];
+                        const member2 = team[j];
+                        const cachedScores = this.candidateCache[member1.id] || [];
+                        const score = cachedScores.find(s => s.id === member2.id)?.gnn_score || 0;
+                        totalScore += score;
+                        pairs++;
+                    }
+                }
+                return pairs > 0 ? totalScore / pairs : 1.0;
+            }
+        }
+        const gnn = new GNN();
+
+        let isSearching = false;
+
+        // --- REQUIREMENT HELPER FUNCTIONS ---
+        function getTraitCounts(team, emblems) {
+            const counts = {};
+            team.forEach(c => {
+                c.traits.forEach(t => {
+                    counts[t] = (counts[t] || 0) + 1;
+                });
+            });
+            emblems.forEach(emblemId => {
+                counts[emblemId] = (counts[emblemId] || 0) + 1;
+            });
+            return counts;
+        }
+
+        function calculateSynergyScore(team, emblems) { 
+            const traitCounts = getTraitCounts(team, emblems);
+            let score = 0; 
+            for (const traitId in traitCounts) { 
+                if (SOLO_TRAITS.has(traitId)) continue;
+                const traitData = TRAITS[traitId]; 
+                if (traitData && traitData.thresholds) { 
+                    for (const threshold of traitData.thresholds) { 
+                        if (traitCounts[traitId] >= threshold) { score++; } 
+                    } 
+                } 
+            } 
+            return score; 
+        }
+        
+        function hasOrphanUnits(team, emblems) {
+            const traitCounts = getTraitCounts(team, emblems);
+            const activeTraits = new Set();
+            for (const traitId in traitCounts) {
+                const traitData = TRAITS[traitId];
+                if (traitData && traitData.thresholds && traitCounts[traitId] >= traitData.thresholds[0]) {
+                    activeTraits.add(traitId);
+                }
+            }
+            if (activeTraits.size === 0) return team.length > 0;
+            for (const champion of team) {
+                const hasActiveTeamTrait = champion.traits.some(traitId => !SOLO_TRAITS.has(traitId) && activeTraits.has(traitId));
+                if (!hasActiveTeamTrait) return true;
+            }
+            return false;
+        }
+
+        function hasLowCohesion(team, emblems) {
+            if (team.length < 5) {
+                return false;
+            }
+            const LOW_SYNERGY_THRESHOLD = 2;
+            const traitCounts = getTraitCounts(team, emblems);
+            
+            const activeSynergies = new Map();
+            for (const traitId in traitCounts) {
+                if (SOLO_TRAITS.has(traitId)) continue;
+                const traitData = TRAITS[traitId];
+                if (!traitData || !traitData.thresholds) continue;
+                
+                let activeLevel = 0;
+                for (const threshold of traitData.thresholds) {
+                    if (traitCounts[traitId] >= threshold) activeLevel = threshold;
+                    else break;
+                }
+                if (activeLevel > 0) activeSynergies.set(traitId, activeLevel);
+            }
+
+            const highLevelSynergies = new Set();
+            const lowLevelSynergies = new Set();
+            for (const [traitId, level] of activeSynergies.entries()) {
+                if (level > LOW_SYNERGY_THRESHOLD) {
+                    highLevelSynergies.add(traitId);
+                } else {
+                    lowLevelSynergies.add(traitId);
+                }
+            }
+
+            if (highLevelSynergies.size === 0 && lowLevelSynergies.size > 1) return true;
+
+            let unanchoredLowSynergyCount = 0;
+            for (const lowTrait of lowLevelSynergies) {
+                let isAnchored = false;
+                const unitsForTrait = team.filter(c => c.traits.includes(lowTrait));
+                for (const unit of unitsForTrait) {
+                    if (unit.traits.some(t => highLevelSynergies.has(t))) {
+                        isAnchored = true;
+                        break;
+                    }
+                }
+                if (!isAnchored) {
+                    unanchoredLowSynergyCount++;
+                }
+            }
+            
+            return unanchoredLowSynergyCount >= 2;
+        }
+
+        function canStillMeetRequirements(team, pool, targetSize, requirements, emblems) { 
+            if (requirements.length === 0) return true; 
+            const traitCounts = getTraitCounts(team, emblems);
+            for (const req of requirements) { 
+                const traitInfo = TRAIT_MAP.get(req.name); 
+                if (!traitInfo) continue; 
+                const currentCount = traitCounts[traitInfo.id] || 0;
+                const poolCount = pool.filter(c => c.traits.includes(traitInfo.id)).length; 
+                if (currentCount + poolCount < req.count) return false; 
+            } 
+            return true; 
+        }
+
+        function fullyMeetsRequirements(team, requirements, emblems) {
+            if (requirements.length === 0) return true;
+            const traitCounts = getTraitCounts(team, emblems);
+            for (const req of requirements) {
+                const traitInfo = TRAIT_MAP.get(req.name);
+                if (!traitInfo) continue;
+                if ((traitCounts[traitInfo.id] || 0) < req.count) return false;
+            }
+            return true;
+        }
+
+        function checkCostReqs(team, costReqs, isFinalCheck) {
+            const teamCostCounts = {};
+            for(let i = 1; i <= 5; i++) teamCostCounts[i] = 0;
+            team.forEach(c => { teamCostCounts[c.cost]++; });
+
+            for (const cost in costReqs) {
+                if (teamCostCounts[cost] > costReqs[cost]) return false;
+                if (isFinalCheck && teamCostCounts[cost] !== costReqs[cost]) return false;
+            }
+            return true;
+        }
+
+        function checkForcedActiveTraits(team, forcedChampions, emblems) {
+            if (forcedChampions.length === 0) return true;
+            const traitCounts = getTraitCounts(team, emblems);
+
+            for (const forcedChampId of forcedChampions) {
+                const championInTeam = team.find(c => c.id === forcedChampId);
+                if (championInTeam) {
+                    for (const traitId of championInTeam.traits) {
+                        const traitData = TRAITS[traitId];
+                        if (!traitData || !traitData.thresholds) continue;
+                        if ((traitCounts[traitId] || 0) < traitData.thresholds[0]) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        // --- MAIN CONTROLLER ---
+        function getSearchParams() {
+            const includedChampionIds = getSelectedValues('includedChampions');
+            const excludedChampionIds = getSelectedValues('excludedChampions');
+            
+            const requiredTraits = [];
+            document.querySelectorAll('#requiredTraits > div').forEach(row => {
+                const traitName = row.querySelector('select').value;
+                const count = parseInt(row.querySelectorAll('select')[1].value);
+                if (traitName && count > 0) requiredTraits.push({ name: traitName, count: count });
+            });
+            
+            const costRequirements = {};
+            for(let i = 1; i <= 5; i++) {
+                const checkbox = document.getElementById(`cost-req-enabled-${i}`);
+                if (checkbox && checkbox.checked) {
+                    const input = document.getElementById(`cost-req-${i}`);
+                    costRequirements[i] = parseInt(input.value);
+                }
+            }
+
+            return {
+                teamSize: parseInt(document.getElementById('teamSize').value),
+                initialTeam: includedChampionIds.map(id => CHAMPION_MAP.get(id)),
+                initialPool: CHAMPIONS.filter(c => !includedChampionIds.includes(c.id) && !excludedChampionIds.includes(c.id)),
+                requiredSynergies: requiredTraits,
+                costRequirements: costRequirements,
+                forceActiveChampions: getSelectedValues('forceActiveTraitChampions'),
+                emblems: getSelectedValues('emblemSelect').map(name => TRAIT_MAP.get(name).id),
+                gnnPruningStrength: parseInt(document.getElementById('gnnPruningStrength').value),
+                onProgress: (count, solutions) => {
+                    const searchStatsEl = document.getElementById('searchStats');
+                    searchStatsEl.innerHTML = `<i class="fas fa-sitemap"></i> ${count.toLocaleString()} nodes checked | <span class="text-purple-400 font-bold">${solutions.size}</span> comps found`;
+                    if (solutions.size > 0) {
+                        const bestTeam = Array.from(solutions.values()).sort((a, b) => b.score - a.score)[0].team;
+                        updateLivePath(bestTeam);
+                        renderSolutions(Array.from(solutions.values()), getSearchParams().emblems);
+                    }
+                }
+            };
+        }
+
+        async function runSolver() {
+            if (isSearching) return;
+            
+            const errorDisplay = document.getElementById('errorDisplay');
+            errorDisplay.classList.add('hidden');
+
+            try {
+                isSearching = true;
+                
+                document.getElementById('findTeamBtn').classList.add('hidden');
+                document.getElementById('stopBtn').classList.remove('hidden');
+                document.getElementById('welcomeMessage').classList.add('hidden');
+                document.getElementById('resultsContainer').classList.remove('hidden');
+                document.getElementById('solutionsList').innerHTML = '';
+                
+                const startTime = performance.now();
+                const searchParams = getSearchParams();
+                
+                document.getElementById('stopBtn').onclick = () => { isSearching = false; };
+
+                const { solutions, nodes } = await runExhaustiveSolver(searchParams);
+                const stopReason = isSearching ? 'Exhaustive search completed.' : 'Manually stopped by user.';
+                
+                const duration = ((performance.now() - startTime) / 1000).toFixed(2);
+                const searchStatsEl = document.getElementById('searchStats');
+                searchStatsEl.innerHTML = `<i class="fas fa-stopwatch"></i> ${duration}s | <i class="fas fa-sitemap"></i> ${nodes.toLocaleString()} nodes checked | <span class="text-purple-400 font-bold">${solutions.size}</span> comps found
+                <br><p class="text-xs text-gray-500 mt-1"><strong class="text-gray-400">Stop Reason:</strong> ${stopReason}</p>`;
+                
+                renderSolutions(Array.from(solutions.values()), searchParams.emblems);
+
+            } catch (error) {
+                console.error("Search failed:", error);
+                errorDisplay.innerHTML = `<p>Error: ${error.message}</p><pre class="text-xs text-red-300 mt-2">${error.stack ? error.stack.split('\n').slice(0, 2).join('\n') : 'No stack trace available.'}</pre>`;
+            } finally {
+                stopSearch();
+            }
+        }
+
+        async function runExhaustiveSolver(params) {
+            const { teamSize, initialTeam, initialPool, requiredSynergies, costRequirements, forceActiveChampions, emblems, gnnPruningStrength, onProgress } = params;
+            const foundSolutions = new Map();
+            let nodesVisited = 0;
+            const MAX_SAFETY_NODES = 8000000;
+            const UI_UPDATE_INTERVAL = 100000;
+
+            const sortedInitialPool = gnn.getRankedCandidates(initialTeam, initialPool);
+            
+            const PRUNING_THRESHOLDS = [0, 0.1, 0.25, 0.4, 0.6];
+            const pruneThreshold = PRUNING_THRESHOLDS[gnnPruningStrength];
+
+            async function findCompsRecursive(currentTeam, availablePool, startIndex) {
+                if (!isSearching || nodesVisited > MAX_SAFETY_NODES) return;
+                
+                nodesVisited++;
+                if (nodesVisited % UI_UPDATE_INTERVAL === 0) {
+                    onProgress(nodesVisited, foundSolutions);
+                    await new Promise(resolve => setTimeout(resolve, 1));
+                }
+
+                if (currentTeam.length === teamSize) {
+                    if (checkCostReqs(currentTeam, costRequirements, true) &&
+                        fullyMeetsRequirements(currentTeam, requiredSynergies, emblems) && 
+                        !hasOrphanUnits(currentTeam, emblems) &&
+                        !hasLowCohesion(currentTeam, emblems) &&
+                        checkForcedActiveTraits(currentTeam, forceActiveChampions, emblems)
+                    ) {
+                        const teamId = currentTeam.map(c => c.id).sort().join(',');
+                        if (!foundSolutions.has(teamId)) {
+                            const score = calculateSynergyScore(currentTeam, emblems);
+                            foundSolutions.set(teamId, { team: currentTeam, score: score });
+                        }
+                    }
+                    return;
+                }
+
+                const teamTraits = new Set(currentTeam.flatMap(c => c.traits));
+
+                for (let i = startIndex; i < availablePool.length; i++) {
+                    const candidate = availablePool[i];
+                    
+                    // NEW HEURISTIC: Check for trait connection before proceeding
+                    if (currentTeam.length > 0 && !candidate.traits.some(t => teamTraits.has(t))) {
+                        continue;
+                    }
+                    
+                    const newTeam = [...currentTeam, candidate];
+
+                    if (newTeam.length > teamSize) continue;
+                    if (newTeam.filter(c => LEE_SIN_VARIANT_IDS.has(c.id)).length > 1) continue;
+                    if (!checkCostReqs(newTeam, costRequirements, false)) continue;
+                    
+                    if (pruneThreshold > 0 && newTeam.length > 2) {
+                        const potential = gnn.getTeamPotential(newTeam);
+                        if (potential < pruneThreshold) {
+                            continue; 
+                        }
+                    }
+
+                    if (!canStillMeetRequirements(newTeam, availablePool.slice(i + 1), teamSize, requiredSynergies, emblems)) continue;
+                    
+                    await findCompsRecursive(newTeam, availablePool, i + 1);
+                }
+            }
+
+            await findCompsRecursive(initialTeam, sortedInitialPool, 0);
+            onProgress(nodesVisited, foundSolutions); 
+            return { solutions: foundSolutions, nodes: nodesVisited };
+        }
+
+
+        function stopSearch() {
+            isSearching = false;
+            document.getElementById('findTeamBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+        }
+
+        async function handleRetrain() {
+            const findBtn = document.getElementById('findTeamBtn');
+            const findBtnIcon = findBtn.querySelector('i');
+            const openGnnBtn = document.getElementById('openGnnModalBtn');
+
+            const progressContainer = document.getElementById('trainingProgressContainer');
+            const progressBar = document.getElementById('trainingProgressBar');
+            const statusText = document.getElementById('trainingStatusText');
+            const retrainBtn = document.getElementById('retrainGnnBtn');
+
+            if (retrainBtn) retrainBtn.disabled = true;
+            findBtn.disabled = true;
+            openGnnBtn.disabled = true;
+            
+            findBtnIcon.className = 'fas fa-spinner fa-spin mr-2';
+            findBtn.childNodes[2].nodeValue = " Training GNN...";
+            
+            if (progressContainer) {
+                progressContainer.classList.remove('hidden');
+            }
+            
+            const depth = parseInt(document.getElementById('gnnDepth').value);
+            await gnn.train(depth, async (progress, status) => {
+                if (progressBar && statusText) {
+                    progressBar.style.width = `${progress * 100}%`;
+                    statusText.textContent = status;
+                }
+                await new Promise(resolve => setTimeout(resolve, 0));
+            });
+            
+            if (document.getElementById('gnnMatrixViz')) {
+                 renderGNNMatrix();
+            }
+
+            setTimeout(() => {
+                if (progressContainer) {
+                    progressContainer.classList.add('hidden');
+                }
+                if (retrainBtn) {
+                    retrainBtn.disabled = false;
+                }
+                findBtn.disabled = false;
+                openGnnBtn.disabled = false;
+                findBtnIcon.className = 'fas fa-cogs mr-2';
+                findBtn.childNodes[2].nodeValue = " Start Search";
+            }, 500);
+        }
+
+        function renderGNNMatrix() {
+            const container = document.getElementById('gnnMatrixViz');
+            if (!container) return;
+            const matrix = gnn.synergyMatrix;
+            const traitsWithSynergy = new Set();
+            Object.keys(matrix).forEach(t1 => {
+                traitsWithSynergy.add(t1);
+                Object.keys(matrix[t1]).forEach(t2 => traitsWithSynergy.add(t2));
+            });
+            const sortedTraits = Array.from(traitsWithSynergy).sort((a,b) => (TRAITS[a]?.name || a).localeCompare(TRAITS[b]?.name || b));
+
+            let html = '<table class="w-full text-xs text-center border-collapse">';
+            html += '<thead><tr><th class="p-1 border border-gray-700"></th>';
+            sortedTraits.forEach(t => html += `<th class="p-1 border border-gray-700 transform -rotate-45 h-20 w-8"><span class="inline-block w-full">${TRAITS[t]?.name || t}</span></th>`);
+            html += '</tr></thead><tbody>';
+            
+            sortedTraits.forEach(rowTrait => {
+                html += `<tr><td class="font-bold p-1 border border-gray-700 text-left whitespace-nowrap">${TRAITS[rowTrait]?.name || rowTrait}</td>`;
+                sortedTraits.forEach(colTrait => {
+                    const [t1, t2] = [rowTrait, colTrait].sort();
+                    const score = t1 === t2 ? 1 : (matrix[t1]?.[t2] || 0);
+                    const opacity = Math.min(1, Math.max(0, score / 2.0));
+                    html += `<td class="p-1 border border-gray-700"><div class="w-6 h-6 rounded mx-auto matrix-cell" style="background-color: rgba(192, 132, 252, ${opacity});"></div></td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+        
+        // --- UI INITIALIZATION AND EVENT LISTENERS ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            const findBtn = document.getElementById('findTeamBtn');
+            const findBtnIcon = findBtn.querySelector('i');
+            const openGnnBtn = document.getElementById('openGnnModalBtn');
+            
+            findBtn.disabled = true;
+            openGnnBtn.disabled = true;
+            findBtnIcon.className = 'fas fa-spinner fa-spin mr-2';
+            findBtn.childNodes[2].nodeValue = " Training GNN...";
+            
+            const initialDepth = parseInt(document.getElementById('gnnDepth').value);
+            await gnn.train(initialDepth, null);
+            
+            findBtn.disabled = false;
+            openGnnBtn.disabled = false;
+            findBtnIcon.className = 'fas fa-cogs mr-2';
+            findBtn.childNodes[2].nodeValue = " Start Search";
+
+            const modal = document.getElementById('gnnModal');
+            document.getElementById('openGnnModalBtn').addEventListener('click', () => {
+                modal.classList.remove('hidden');
+                if (!document.getElementById('gnnMatrixViz')?.innerHTML) {
+                    renderGNNMatrix();
+                }
+            });
+            document.getElementById('closeGnnModalBtn').addEventListener('click', () => modal.classList.add('hidden'));
+            modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+            
+            const retrainBtn = document.getElementById('retrainGnnBtn');
+            if (retrainBtn) {
+                retrainBtn.addEventListener('click', handleRetrain);
+            }
+
+            document.getElementById('gnnDepth').addEventListener('input', e => { document.getElementById('gnnDepthValue').textContent = e.target.value; });
+            document.getElementById('gnnDepth').addEventListener('change', handleRetrain);
+            document.getElementById('teamSize').addEventListener('input', e => { document.getElementById('teamSizeValue').textContent = e.target.value; });
+            
+            const pruningSlider = document.getElementById('gnnPruningStrength');
+            const pruningValueEl = document.getElementById('gnnPruningStrengthValue');
+            const pruningLabels = ["Off", "Light", "Medium", "Heavy", "Aggressive"];
+            pruningSlider.addEventListener('input', e => {
+                pruningValueEl.textContent = pruningLabels[e.target.value];
+            });
+
+            multiSelectAPIs['emblemSelect'] = createMultiSelect('emblemSelect', EMBLEM_TRAIT_NAMES.map(name => ({ value: name, text: name })), 'Select emblems...');
+            multiSelectAPIs['includedChampions'] = createMultiSelect('includedChampions', CHAMPIONS.map(c => ({ value: c.id, text: c.name })), 'Select champions...');
+            multiSelectAPIs['excludedChampions'] = createMultiSelect('excludedChampions', CHAMPIONS.map(c => ({ value: c.id, text: c.name })), 'Select champions...');
+            multiSelectAPIs['forceActiveTraitChampions'] = createMultiSelect('forceActiveTraitChampions', CHAMPIONS.map(c => ({ value: c.id, text: c.name })), 'Select champions...');
+            
+            document.getElementById('addTraitRequirementBtn').addEventListener('click', () => addTraitRequirementRow());
+            
+            createCostRequirementInputs();
+            
+            document.getElementById('findTeamBtn').addEventListener('click', runSolver);
+        });
+        
+        function createCostRequirementInputs() {
+            const container = document.getElementById('costRequirements');
+            container.innerHTML = '';
+            for (let i = 1; i <= 5; i++) {
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-3 p-2 bg-gray-700/50 rounded-lg';
+                div.innerHTML = `
+                    <input type="checkbox" id="cost-req-enabled-${i}" class="h-5 w-5 rounded bg-gray-600 border-gray-500 text-purple-500 focus:ring-purple-600">
+                    <label for="cost-req-enabled-${i}" class="w-24 font-medium champion-cost-${i} rounded-md px-2 py-1 text-center">Cost ${i}</label>
+                    <input type="number" id="cost-req-${i}" min="0" max="10" value="0" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-center" disabled>
+                `;
+                container.appendChild(div);
+
+                const checkbox = div.querySelector(`#cost-req-enabled-${i}`);
+                const numberInput = div.querySelector(`#cost-req-${i}`);
+                checkbox.addEventListener('change', (e) => {
+                    numberInput.disabled = !e.target.checked;
+                });
+            }
+        }
+
+        function addTraitRequirementRow(trait, count) { 
+            const container = document.getElementById('requiredTraits'); 
+            const rowId = `trait-row-${Date.now()}`; 
+            const row = document.createElement('div'); 
+            row.id = rowId; 
+            row.className = 'flex items-center gap-2'; 
+            
+            const traitSelect = document.createElement('select'); 
+            traitSelect.className = 'w-1/2 bg-gray-700 border border-gray-600 rounded-lg p-2'; 
+            SORTED_TRAIT_NAMES.forEach(name => { 
+                const option = document.createElement('option'); 
+                option.value = name; 
+                option.textContent = name; 
+                traitSelect.appendChild(option); 
+            }); 
+            
+            const countSelect = document.createElement('select');
+            countSelect.className = 'w-1/2 bg-gray-700 border border-gray-600 rounded-lg p-2';
+
+            function updateCountOptions() {
+                const selectedTraitName = traitSelect.value;
+                const traitData = TRAIT_MAP.get(selectedTraitName);
+                countSelect.innerHTML = '';
+                if (traitData && traitData.thresholds) {
+                    traitData.thresholds.forEach(t => {
+                        const option = document.createElement('option');
+                        option.value = t;
+                        option.textContent = `${t} units`;
+                        countSelect.appendChild(option);
+                    });
+                }
+                if (count) countSelect.value = count;
+            }
+
+            traitSelect.addEventListener('change', updateCountOptions);
+            if (trait) traitSelect.value = trait;
+            updateCountOptions();
+
+            const removeBtn = document.createElement('button'); 
+            removeBtn.innerHTML = '<i class="fas fa-times text-red-500"></i>'; 
+            removeBtn.onclick = () => document.getElementById(rowId).remove(); 
+            
+            row.appendChild(traitSelect); 
+            row.appendChild(countSelect); 
+            row.appendChild(removeBtn); 
+            container.appendChild(row); 
+        }
+
+        function createMultiSelect(containerId, options, placeholder) { 
+            const container = document.getElementById(containerId); 
+            const selectedValues = new Set(); 
+            const display = document.createElement('div'); 
+            display.className = 'w-full bg-gray-700 border border-gray-600 rounded-lg p-2 flex items-center justify-between cursor-pointer'; 
+            display.innerHTML = `<span class="text-gray-400">${placeholder}</span><i class="fas fa-chevron-down"></i>`; 
+            const dropdown = document.createElement('div'); 
+            dropdown.className = 'multi-select-dropdown bg-gray-700 border border-gray-600 rounded-lg mt-1 hidden custom-scrollbar'; 
+            const checkboxes = {};
+            options.forEach(option => { 
+                const item = document.createElement('div'); 
+                item.className = 'p-2 hover:bg-gray-600 cursor-pointer flex items-center'; 
+                item.dataset.value = option.value; 
+                item.innerHTML = `<input type="checkbox" class="mr-2 pointer-events-none"> ${option.text}`; 
+                checkboxes[option.value] = item.querySelector('input');
+                item.addEventListener('click', () => { 
+                    const value = item.dataset.value; 
+                    if (selectedValues.has(value)) { selectedValues.delete(value); checkboxes[value].checked = false; } else { selectedValues.add(value); checkboxes[value].checked = true; } 
+                    updateDisplay(); 
+                }); 
+                dropdown.appendChild(item); 
+            }); 
+            container.appendChild(display); 
+            container.appendChild(dropdown); 
+            container.dataset.values = JSON.stringify([]); 
+            function updateDisplay() { 
+                const displaySpan = display.querySelector('span'); 
+                if (selectedValues.size === 0) { displaySpan.textContent = placeholder; displaySpan.classList.add('text-gray-400'); } else { displaySpan.textContent = `${selectedValues.size} selected`; displaySpan.classList.remove('text-gray-400'); } 
+                container.dataset.values = JSON.stringify(Array.from(selectedValues)); 
+            } 
+            display.addEventListener('click', () => dropdown.classList.toggle('hidden')); 
+            document.addEventListener('click', (e) => { if (!container.contains(e.target)) dropdown.classList.add('hidden'); });
+            return { setSelected: (values) => { selectedValues.clear(); values.forEach(v => selectedValues.add(v)); Object.keys(checkboxes).forEach(value => { checkboxes[value].checked = selectedValues.has(value); }); updateDisplay(); } };
+        }
+        
+        function getSelectedValues(containerId) { return JSON.parse(document.getElementById(containerId).dataset.values); }
+        
+        function generateTeamCode(team) {
+            if (!team || team.length === 0) return null;
+
+            const codableTeam = team.filter(c => c.exportCode);
+            if (codableTeam.length !== team.length) {
+                console.warn("Some champions in the team do not have an export code and were excluded.");
+            }
+
+            codableTeam.sort((a, b) => {
+                if (a.cost !== b.cost) {
+                    return a.cost - b.cost;
+                }
+                return a.name.localeCompare(b.name);
+            });
+
+            const codes = codableTeam.map(c => c.exportCode).join('');
+            const paddedCodes = codes.padEnd(30, '0');
+            return `02${paddedCodes}TFTSet15`;
+        }
+
+        function copyCodeToClipboard(code) {
+            if (!code) return;
+            const textArea = document.createElement("textarea");
+            textArea.value = code;
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                const toast = document.getElementById('feedback-toast');
+                toast.classList.remove('opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('opacity-0');
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy code: ', err);
+            }
+            document.body.removeChild(textArea);
+        }
+
+        // --- RENDERING FUNCTIONS ---
+        function renderSolutions(solutions, emblems) { 
+            solutions.sort((a, b) => b.score - a.score); 
+            const solutionsList = document.getElementById('solutionsList'); 
+            solutionsList.innerHTML = ''; 
+            const displayLimit = 50;
+            const solutionsToDisplay = solutions.slice(0, displayLimit); 
+            if (solutionsToDisplay.length === 0 && !isSearching) {
+                 solutionsList.innerHTML = '<p class="text-center text-gray-400 py-8">No valid compositions found matching all criteria. Try relaxing your requirements or reducing pruning strength.</p>';
+            } else {
+                solutionsToDisplay.forEach((solution, index) => { 
+                    displaySolution(solution.team, solution.score, index + 1, emblems, index < 20); 
+                }); 
+            }
+            if (solutions.length > displayLimit) { 
+                const warning = document.createElement('p'); 
+                warning.className = 'text-center text-amber-400 my-4'; 
+                warning.textContent = `Displaying top ${displayLimit} of ${solutions.length} compositions...`; 
+                solutionsList.appendChild(warning); 
+            } 
+        }
+
+        function displaySolution(team, score, count, emblems, generateCode) { 
+            const solutionsList = document.getElementById('solutionsList'); 
+            const solutionDiv = document.createElement('div'); 
+            solutionDiv.className = 'bg-gray-700/50 p-4 rounded-lg'; 
+            
+            const traitCounts = getTraitCounts(team, emblems);
+            
+            const activeTraitsHtml = Object.entries(traitCounts)
+                .map(([traitId, count]) => {
+                    const traitData = TRAITS[traitId];
+                    if (!traitData || !traitData.thresholds) return null;
+                    
+                    let activeThreshold = 0;
+                    for (const t of traitData.thresholds) {
+                        if (count >= t) activeThreshold = t;
+                        else break;
+                    }
+
+                    if (activeThreshold > 0) {
+                        const isEmblem = emblems.includes(traitId);
+                        return `<span class="bg-gray-900/50 px-2 py-1 rounded text-sm">${activeThreshold}x ${TRAIT_EMOJIS[traitId] || ''} ${traitData.name} ${isEmblem ? '<span class="text-purple-400 font-bold">(+1)</span>' : ''}</span>`;
+                    }
+                    return null;
+                })
+                .filter(Boolean)
+                .join('');
+
+            const teamHtml = team.sort((a,b) => a.cost - b.cost || a.name.localeCompare(b.name)).map(champion => ` <div class="text-center"> <img src="https://placehold.co/64x64/1f2937/ffffff/png?text=${champion.name.replace(/ \(.*/, '').substring(0,2)}" onerror="this.onerror=null;this.src='https://placehold.co/64x64/1f2937/ffffff?text=Err';" alt="${champion.name}" class="w-16 h-16 mx-auto rounded-md champion-cost-${champion.cost}"> <p class="mt-1 text-xs font-semibold truncate">${champion.name}</p> </div>`).join(''); 
+            
+            let codeSectionHtml = '';
+            if (generateCode) {
+                const copyButtonId = `copy-btn-${count}`;
+                const codeInputId = `code-input-${count}`;
+                const teamCode = generateTeamCode(team);
+                const hasInvalidCode = !teamCode;
+                const tooltipText = hasInvalidCode ? `Cannot generate code. Missing code for one or more champions.` : 'Copy team code';
+
+                codeSectionHtml = `
+                    <div class="mt-3 flex items-center gap-2">
+                        <input id="${codeInputId}" type="text" readonly class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-400 text-xs font-mono focus:outline-none" value="${teamCode || 'Error: Missing champion code'}">
+                        <button id="${copyButtonId}" 
+                                title="${tooltipText}"
+                                class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-3 rounded-md text-xs transition-colors duration-200 ${hasInvalidCode ? 'opacity-50 cursor-not-allowed' : ''}" 
+                                ${hasInvalidCode ? 'disabled' : ''}>
+                            Copy
+                        </button>
+                    </div>`;
+            }
+
+
+            solutionDiv.innerHTML = `
+                <div class="flex justify-between items-center mb-3">
+                    <h4 class="font-semibold text-lg text-gray-300">Rank #${count}</h4>
+                     <span class="text-sm font-bold text-purple-400 bg-purple-900/50 px-2 py-1 rounded-md">Synergy Score: ${score}</span>
+                </div>
+                <div class="flex flex-wrap gap-2 mb-4">${activeTraitsHtml || '<p class="text-sm text-gray-500">No active synergies.</p>'}</div>
+                <div class="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-9 gap-2">${teamHtml}</div>
+                ${codeSectionHtml}
+                `; 
+            solutionsList.appendChild(solutionDiv); 
+
+            if (generateCode && !team.some(c => !c.exportCode)) {
+                document.getElementById(`copy-btn-${count}`).addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const codeInput = document.getElementById(`code-input-${count}`);
+                    copyCodeToClipboard(codeInput.value);
+                });
+            }
+        }
+        
+        function updateLivePath(team) { 
+            const container = document.getElementById('livePathContainer'); 
+            container.innerHTML = team.map(champion => ` <div class="text-center search-path-champ"> <img src="https://placehold.co/48x48/1f2937/ffffff/png?text=${champion.name.replace(/ \(.*/, '').substring(0,2)}" onerror="this.onerror=null;this.src='https://placehold.co/48x48/1f2937/ffffff?text=Err';" alt="${champion.name}" class="w-12 h-12 mx-auto rounded-md champion-cost-${champion.cost}"> <p class="mt-1 text-xs font-semibold truncate">${champion.name}</p> </div>`).join('') || '<p class="text-gray-500">Starting search...</p>'; 
+        }
+    </script>
+</body>
+</html>
